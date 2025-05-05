@@ -60,22 +60,20 @@ def transform():
         for i, (tx, ty) in enumerate(targets):
             print(f"  Target {i}: ({tx}, {ty})")
         
-        # Run the transformation
+        # Run the transformation - now supports minimax, expectimax, and adaptive
         result = simulation.transform(
             algorithm=algorithm,
             topology=topology,
             movement=movement,
             control_mode=control_mode
         )
-
-        
         
         if not result["moves"]:
             print("WARNING: No moves were generated. The transformation may have failed.")
         else:
             print("TRANSFORMATION RESULT:")
             print(f"  Moves: {len(result['moves'])}")
-            print(f"  Nodes explored: {result['nodes_explored']}")
+            print(f"  Nodes explored: {result.get('nodes_explored', 0)}")
             
             # Detailed move logging
             print("MOVES (Backend format):")
@@ -114,8 +112,9 @@ def transform():
             'success': True if frontend_moves else False,
             'moves': frontend_moves,
             'time': result['time'],
-            'nodes': result['nodes_explored'],
-            'message': 'Transformation completed successfully' if frontend_moves else 'No valid moves found'
+            'nodes': result.get('nodes_explored', 0),
+            'message': 'Transformation completed successfully' if frontend_moves else 'No valid moves found',
+            'algorithm_used': result.get('algorithm_used', algorithm)  # Include which algorithm was actually used
         }
         
         return jsonify(response)
@@ -139,6 +138,173 @@ def reset():
     # Reset the simulation
     simulation.reset()
     return jsonify({'success': True, 'message': 'Simulation reset'})
+
+@app.route('/api/shapes', methods=['GET'])
+def get_available_shapes():
+    # Return available shape types
+    shapes = ['square', 'circle', 'triangle', 'heart']
+    return jsonify({'shapes': shapes})
+
+@app.route('/api/algorithms', methods=['GET'])
+def get_available_algorithms():
+    # Return available algorithms with descriptions
+    algorithms = {
+        'astar': 'A* Search - Optimal pathfinding using Manhattan distance heuristic',
+        'bfs': 'Breadth-First Search - Complete search guaranteeing shortest path',
+        'greedy': 'Greedy Search - Fast but potentially suboptimal pathfinding',
+        'minimax': 'Minimax - Adversarial search for complex environments',
+        'expectimax': 'Expectimax - Probabilistic search handling uncertainty',
+        'adaptive': 'Adaptive - Dynamic algorithm selection based on environment'
+    }
+    return jsonify({'algorithms': algorithms})
+
+@app.route('/api/analyze', methods=['POST'])
+def analyze_performance():
+    """
+    Analyze the performance of different algorithms for a specific shape and parameters.
+    This endpoint runs multiple transformations with different algorithms and compares results.
+    """
+    try:
+        # Get request data
+        data = request.json
+        
+        # Extract parameters
+        shape = data.get('shape', 'square')
+        num_elements = data.get('num_elements', 8)
+        topology = data.get('topology', 'vonNeumann')
+        control_mode = data.get('control_mode', 'centralized')
+        
+        # Algorithms to compare
+        algorithms = ['astar', 'bfs', 'greedy', 'minimax', 'expectimax', 'adaptive']
+        
+        results = {}
+        
+        # Run each algorithm
+        for alg in algorithms:
+            print(f"Testing algorithm: {alg}")
+            
+            # Reset simulation for clean comparison
+            simulation.reset()
+            simulation.initialize_elements(num_elements)
+            simulation.set_target_shape(shape, num_elements)
+            
+            # Run transformation
+            result = simulation.transform(
+                algorithm=alg,
+                topology=topology,
+                movement='parallel',  # Use parallel for better comparison
+                control_mode=control_mode
+            )
+            
+            # Store results
+            success_rate = 0
+            # Calculate success rate
+            total_elements = sum(1 for e in simulation.controller.elements.values() if e.has_target())
+            at_target = sum(1 for e in simulation.controller.elements.values() 
+                         if e.has_target() and e.x == e.target_x and e.y == e.target_y)
+            
+            if total_elements > 0:
+                success_rate = at_target / total_elements
+            
+            results[alg] = {
+                'success_rate': success_rate,
+                'moves': len(result.get('moves', [])),
+                'time': result.get('time', 0),
+                'nodes_explored': result.get('nodes_explored', 0)
+            }
+            
+            print(f"  Success rate: {success_rate*100:.1f}%")
+            print(f"  Moves: {len(result.get('moves', []))}")
+            print(f"  Time: {result.get('time', 0):.2f}s")
+            
+        return jsonify({
+            'success': True,
+            'results': results,
+            'shape': shape,
+            'elements': num_elements,
+            'topology': topology,
+            'control_mode': control_mode
+        })
+        
+    except Exception as e:
+        import traceback
+        print(f"ERROR during analysis: {str(e)}")
+        traceback.print_exc()
+        
+        return jsonify({
+            'success': False,
+            'message': f'Error during analysis: {str(e)}'
+        }), 500
+
+@app.route('/api/deadlock-locations', methods=['POST'])
+def analyze_deadlock_locations():
+    """
+    Identify locations on the grid where deadlocks commonly occur for specific shapes.
+    This helps understand challenging areas in the formation process.
+    """
+    try:
+        # Get request data
+        data = request.json
+        
+        # Extract parameters
+        shape = data.get('shape', 'square')
+        num_elements = data.get('num_elements', 8)
+        topology = data.get('topology', 'vonNeumann')
+        
+        # Number of test runs
+        num_runs = data.get('runs', 5)
+        
+        # Create a grid to track deadlock locations
+        deadlock_grid = [[0 for _ in range(simulation.grid.width)] for _ in range(simulation.grid.height)]
+        
+        # Run multiple transformations and track where elements get stuck
+        for run in range(num_runs):
+            print(f"Deadlock analysis run {run+1}/{num_runs}")
+            
+            # Reset simulation
+            simulation.reset()
+            simulation.initialize_elements(num_elements)
+            simulation.set_target_shape(shape, num_elements)
+            
+            # Use non-adversarial algorithms to better identify natural deadlocks
+            simulation.transform(
+                algorithm='astar',
+                topology=topology,
+                movement='parallel',
+                control_mode='independent'
+            )
+            
+            # Check which elements didn't reach targets
+            for eid, element in simulation.controller.elements.items():
+                if element.has_target() and (element.x != element.target_x or element.y != element.target_y):
+                    # Increment deadlock counter for this position
+                    deadlock_grid[element.y][element.x] += 1
+        
+        # Prepare result with normalized heatmap
+        max_value = max(max(row) for row in deadlock_grid)
+        normalized_grid = []
+        if max_value > 0:
+            normalized_grid = [[cell/max_value for cell in row] for row in deadlock_grid]
+        else:
+            normalized_grid = deadlock_grid
+        
+        return jsonify({
+            'success': True,
+            'deadlock_grid': deadlock_grid,
+            'normalized_grid': normalized_grid,
+            'max_value': max_value,
+            'runs': num_runs
+        })
+        
+    except Exception as e:
+        import traceback
+        print(f"ERROR during deadlock analysis: {str(e)}")
+        traceback.print_exc()
+        
+        return jsonify({
+            'success': False,
+            'message': f'Error during deadlock analysis: {str(e)}'
+        }), 500
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
