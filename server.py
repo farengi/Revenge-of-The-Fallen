@@ -59,14 +59,31 @@ def transform():
         print("TARGET POSITIONS:")
         for i, (tx, ty) in enumerate(targets):
             print(f"  Target {i}: ({tx}, {ty})")
+
+        # If the front-end asked for CA, call the new mode:
+        if algorithm == "cellular":
+            result = simulation.transform(
+                algorithm="cellular",
+                topology=topology,
+                movement=movement,
+                control_mode=control_mode
+            )
+        else:
+            result = simulation.transform(
+                algorithm=algorithm,
+                topology=topology,
+                movement=movement,
+                control_mode=control_mode
+            )
+
         
         # Run the transformation
-        result = simulation.transform(
-            algorithm=algorithm,
-            topology=topology,
-            movement=movement,
-            control_mode=control_mode
-        )
+        # result = simulation.transform(
+        #     algorithm=algorithm,
+        #     topology=topology,
+        #     movement=movement,
+        #     control_mode=control_mode
+        # )
 
         
         
